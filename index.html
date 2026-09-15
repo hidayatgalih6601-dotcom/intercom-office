@@ -108,487 +108,511 @@ button:disabled{opacity:.55;cursor:not-allowed}
 </div>
 
 <script>
-const firebaseConfig={
- apiKey:"AIzaSyDSaT5mBsMo_5RwZEWvWfgyxn_sHkz7aIQ",
- authDomain:"office-interkom.firebaseapp.com",
- databaseURL:"https://office-interkom-default-rtdb.asia-southeast1.firebasedatabase.app",
- projectId:"office-interkom",
- storageBucket:"office-interkom.firebasestorage.app",
- messagingSenderId:"1012890360631",
- appId:"1:1012890360631:web:80a37946b5b84b3399d8b2",
- measurementId:"G-YBLQ27PMW1"
+const firebaseConfig = {
+  apiKey: "AIzaSyDSaT5mBsMo_5RwZEWvWfgyxn_sHkz7aIQ",
+  authDomain: "office-interkom.firebaseapp.com",
+  databaseURL: "https://office-interkom-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "office-interkom",
+  storageBucket: "office-interkom.firebasestorage.app",
+  messagingSenderId: "1012890360631",
+  appId: "1:1012890360631:web:80a37946b5b84b3399d8b2",
+  measurementId: "G-YBLQ27PMW1"
 };
 
-const $=id=>document.getElementById(id);
-function msg(t){$("authMsg").textContent=t||""}
+const $ = id => document.getElementById(id);
+function msg(t){ if($("authMsg")) $("authMsg").textContent = t || ""; }
+
 function friendlyError(e){
- const code=e?.code||"";
- const map={
-  "auth/invalid-email":"Format email tidak valid.",
-  "auth/user-not-found":"Akun tidak ditemukan. Silakan Daftar terlebih dahulu.",
-  "auth/wrong-password":"Password salah.",
-  "auth/invalid-credential":"Email atau password salah.",
-  "auth/email-already-in-use":"Email sudah terdaftar. Silakan Masuk.",
-  "auth/weak-password":"Password minimal 6 karakter.",
-  "auth/operation-not-allowed":"Login Email/Password belum diaktifkan di Firebase Authentication.",
-  "auth/popup-blocked":"Popup Google diblokir browser.",
-  "auth/popup-closed-by-user":"Jendela Google ditutup sebelum login selesai.",
-  "auth/network-request-failed":"Koneksi internet bermasalah.",
-  "auth/unauthorized-domain":"Domain website belum diizinkan di Firebase Authentication."
- };
- return map[code] || e?.message || "Terjadi kesalahan.";
-}
-window.addEventListener("error",e=>{console.error(e.error||e.message);if($("authMsg"))msg("Error: "+e.message)});
-window.addEventListener("unhandledrejection",e=>{console.error(e.reason);if($("authMsg"))msg("Error: "+friendlyError(e.reason))});
-
-let firebaseReady=false;
-try{
- firebase.initializeApp(firebaseConfig);
- firebaseReady=true;
-}catch(e){msg("Firebase gagal dimuat: "+friendlyError(e))}
-
-const auth=firebaseReady?firebase.auth():null;
-const db=firebaseReady?firebase.database():null;
-let me=null,channel=null,userRef=null,usersRef=null,speakerRef=null,signalRef=null;
-let peers={},localStream=null,talking=false,speakerTimer=null;
-
-const iceServers={iceServers:[
- {urls:["stun:stun.l.google.com:19302","stun:stun1.l.google.com:19302"]}
-]};
-function setConn(t){console.log("STATUS:",t); if($("connection")) $("connection").textContent=t;}
-function diag(t,...a){
-  console.log("INTERCOM:",t,...a);
-  const map={
-    "MIC READY":"diagMic","SIGNAL IN":"diagSignal","OFFER OUT":"diagSignal",
-    "ANSWER OUT":"diagSignal","ANSWER APPLIED":"diagSignal",
-    "ICE STATE":"diagIce","CONNECTION":"diagIce",
-    "REMOTE TRACK":"diagAudio","REMOTE TRACK EVENT":"diagAudio"
+  const code = e?.code || "";
+  const map = {
+    "auth/invalid-email": "Format email tidak valid.",
+    "auth/user-not-found": "Akun tidak ditemukan. Silakan Daftar terlebih dahulu.",
+    "auth/wrong-password": "Password salah.",
+    "auth/invalid-credential": "Email atau password salah.",
+    "auth/email-already-in-use": "Email sudah terdaftar. Silakan Masuk.",
+    "auth/weak-password": "Password minimal 6 karakter.",
+    "auth/operation-not-allowed": "Login Email/Password belum diaktifkan di Firebase Authentication.",
+    "auth/popup-blocked": "Popup Google diblokir browser.",
+    "auth/popup-closed-by-user": "Jendela Google ditutup sebelum login selesai.",
+    "auth/network-request-failed": "Koneksi internet bermasalah.",
+    "auth/unauthorized-domain": "Domain website belum diizinkan di Firebase Authentication."
   };
-  const el=$(map[t]);
+  return map[code] || e?.message || "Terjadi kesalahan.";
+}
+
+window.addEventListener("error", e => { console.error(e.error || e.message); msg("Error: " + e.message); });
+window.addEventListener("unhandledrejection", e => { console.error(e.reason); msg("Error: " + friendlyError(e.reason)); });
+
+let firebaseReady = false;
+try {
+  firebase.initializeApp(firebaseConfig);
+  firebaseReady = true;
+} catch(e) {
+  msg("Firebase gagal dimuat: " + friendlyError(e));
+}
+
+const auth = firebaseReady ? firebase.auth() : null;
+const db = firebaseReady ? firebase.database() : null;
+let me = null, channel = null, userRef = null, usersRef = null, speakerRef = null, signalRef = null;
+let peers = {}, localStream = null, talking = false, speakerTimer = null;
+
+const iceServers = {
+  iceServers: [
+    { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }
+  ]
+};
+
+function setConn(t){ console.log("STATUS:", t); if($("connection")) $("connection").textContent = t; }
+
+function diag(t, ...a){
+  console.log("INTERCOM:", t, ...a);
+  const map = {
+    "MIC READY": "diagMic", "SIGNAL IN": "diagSignal", "OFFER OUT": "diagSignal",
+    "ANSWER OUT": "diagSignal", "ANSWER APPLIED": "diagSignal",
+    "ICE STATE": "diagIce", "CONNECTION": "diagIce",
+    "REMOTE TRACK": "diagAudio", "REMOTE TRACK EVENT": "diagAudio"
+  };
+  const el = $(map[t]);
   if(el){
-    let text="";
-    if(t==="MIC READY") text="✓ Mikrofon siap";
-    else if(t==="SIGNAL IN") text="✓ Sinyal diterima: "+(a[0]||"");
-    else if(t==="OFFER OUT") text="✓ OFFER dikirim";
-    else if(t==="ANSWER OUT") text="✓ ANSWER dikirim";
-    else if(t==="ANSWER APPLIED") text="✓ ANSWER diterima";
-    else if(t==="ICE STATE") text="ICE: "+(a[1]||a[0]||"");
-    else if(t==="CONNECTION") text="WebRTC: "+(a[1]||a[0]||"");
-    else if(t==="REMOTE TRACK"||t==="REMOTE TRACK EVENT") text="✓ Audio remote diterima";
-    el.textContent=text;
+    let text = "";
+    if(t === "MIC READY") text = "✓ Mikrofon siap";
+    else if(t === "SIGNAL IN") text = "✓ Sinyal diterima: " + (a[0] || "");
+    else if(t === "OFFER OUT") text = "✓ OFFER dikirim";
+    else if(t === "ANSWER OUT") text = "✓ ANSWER dikirim";
+    else if(t === "ANSWER APPLIED") text = "✓ ANSWER diterima";
+    else if(t === "ICE STATE") text = "ICE: " + (a[1] || a[0] || "");
+    else if(t === "CONNECTION") text = "WebRTC: " + (a[1] || a[0] || "");
+    else if(t === "REMOTE TRACK" || t === "REMOTE TRACK EVENT") text = "✓ Audio remote diterima";
+    el.textContent = text;
   }
 }
 
 async function sha256(s){
- const b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(s));
- return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("");
+  const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, "0")).join("");
 }
+
 function safeChannel(s){
- return s.trim().replace(/[.#$[\]\/\\]/g,"-").replace(/\s+/g," ").slice(0,50);
+  return s.trim().replace(/[.#$[\]\/\\]/g, "-").replace(/\s+/g, " ").slice(0, 50);
 }
+
 function beep(freq){
- try{
-  let c=new(window.AudioContext||window.webkitAudioContext)(),o=c.createOscillator(),g=c.createGain();
-  o.frequency.value=freq;g.gain.value=.08;o.connect(g);g.connect(c.destination);o.start();o.stop(c.currentTime+.07);
- }catch(e){}
+  try {
+    let c = new (window.AudioContext || window.webkitAudioContext)(), o = c.createOscillator(), g = c.createGain();
+    o.frequency.value = freq; g.gain.value = .08; o.connect(g); g.connect(c.destination); o.start(); o.stop(c.currentTime + .07);
+  } catch(e) {}
 }
 
-async function doLogin(){
- msg("");
- const btn=$("loginBtn");
- const email=$("email").value.trim();
- const pass=$("pass").value;
- if(!email||!pass){msg("Email dan password wajib diisi.");return}
- btn.disabled=true;btn.textContent="MEMPROSES...";
- try{
-  await auth.signInWithEmailAndPassword(email,pass);
- }catch(e){
-  console.error("LOGIN:",e);
-  msg(friendlyError(e));
- }finally{
-  btn.disabled=false;btn.textContent="Masuk";
- }
+if($("loginBtn")){
+  $("loginBtn").onclick = async () => {
+    msg("");
+    const btn = $("loginBtn"), email = $("email").value.trim(), pass = $("pass").value;
+    if(!email || !pass){ msg("Email dan password wajib diisi."); return; }
+    btn.disabled = true; btn.textContent = "MEMPROSES...";
+    try {
+      await auth.signInWithEmailAndPassword(email, pass);
+    } catch(e) {
+      console.error("LOGIN:", e); msg(friendlyError(e));
+    } finally {
+      btn.disabled = false; btn.textContent = "Masuk";
+    }
+  };
 }
 
-$("loginBtn").onclick=doLogin;
+if($("regBtn")){
+  $("regBtn").onclick = async () => {
+    msg("");
+    const btn = $("regBtn"), name = $("name").value.trim(), email = $("email").value.trim(), pass = $("pass").value;
+    if(!name){ msg("Nama lengkap wajib diisi."); return; }
+    if(!email){ msg("Email wajib diisi."); return; }
+    if(pass.length < 6){ msg("Password minimal 6 karakter."); return; }
+    btn.disabled = true; btn.textContent = "MEMPROSES...";
+    try {
+      const r = await auth.createUserWithEmailAndPassword(email, pass);
+      await r.user.updateProfile({ displayName: name });
+      msg("");
+    } catch(e) {
+      console.error("REGISTER:", e); msg(friendlyError(e));
+    } finally {
+      btn.disabled = false; btn.textContent = "Daftar";
+    }
+  };
+}
 
-$("regBtn").onclick=async()=>{
- msg("");
- const btn=$("regBtn"),name=$("name").value.trim(),email=$("email").value.trim(),pass=$("pass").value;
- if(!name){msg("Nama lengkap wajib diisi.");return}
- if(!email){msg("Email wajib diisi.");return}
- if(pass.length<6){msg("Password minimal 6 karakter.");return}
- btn.disabled=true;btn.textContent="MEMPROSES...";
- try{
-  const r=await auth.createUserWithEmailAndPassword(email,pass);
-  await r.user.updateProfile({displayName:name});
-  msg("");
- }catch(e){console.error("REGISTER:",e);msg(friendlyError(e))}
- finally{btn.disabled=false;btn.textContent="Daftar"}
-};
+if($("google")){
+  $("google").onclick = async () => {
+    msg("");
+    const btn = $("google"); btn.disabled = true; btn.textContent = "MEMPROSES GOOGLE...";
+    try {
+      await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider());
+    } catch(e) {
+      console.error("GOOGLE:", e); msg(friendlyError(e));
+    } finally {
+      btn.disabled = false; btn.textContent = "Masuk dengan Google";
+    }
+  };
+}
 
-$("google").onclick=async()=>{
- msg("");
- const btn=$("google");btn.disabled=true;btn.textContent="MEMPROSES GOOGLE...";
- try{
-  await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider());
- }catch(e){console.error("GOOGLE:",e);msg(friendlyError(e))}
- finally{btn.disabled=false;btn.textContent="Masuk dengan Google"}
-};
-
-auth?.onAuthStateChanged(async u=>{
- me=u;
- if(u){
-  $("login").classList.add("hidden");
-  $("app").classList.remove("hidden");
-  $("userLabel").textContent=(u.displayName||u.email.split("@")[0]).toUpperCase();
-  await loadChannels();
- }else{
-  $("login").classList.remove("hidden");
-  $("app").classList.add("hidden");
- }
+auth?.onAuthStateChanged(async u => {
+  me = u;
+  if(u){
+    $("login").classList.add("hidden");
+    $("app").classList.remove("hidden");
+    $("userLabel").textContent = (u.displayName || u.email.split("@")[0]).toUpperCase();
+    await loadChannels();
+  } else {
+    $("login").classList.remove("hidden");
+    $("app").classList.add("hidden");
+  }
 });
 
 async function loadChannels(){
- const ref=db.ref("channels");
- ref.off();
- ref.on("value",snap=>{
-  let data=snap.val()||{},el=$("channels");el.innerHTML="";
-  if(!data["PNG CALLS"]){
-   db.ref("channels/PNG CALLS/info").set({name:"PNG CALLS",passwordHash:"",createdBy:"System"})
-    .catch(e=>console.error("DEFAULT CHANNEL:",e));
-  }
-  Object.keys(data).forEach(k=>{
-   let users=data[k]?.users||{};
-   let d=document.createElement("div");
-   d.className="card p-5 rounded-2xl cursor-pointer hover:border-amber-500";
-   d.innerHTML='<div class="text-amber-400 text-xl">◉</div><b class="block text-white mt-3"></b><span class="text-xs text-slate-400"></span>';
-   d.querySelector("b").textContent=k;
-   d.querySelector("span").textContent=Object.keys(users).length+" online";
-   d.onclick=()=>openChannel(k);
-   el.appendChild(d);
+  const ref = db.ref("channels");
+  ref.off();
+  ref.on("value", snap => {
+    let data = snap.val() || {}, el = $("channels"); el.innerHTML = "";
+    if(!data["PNG CALLS"]){
+      db.ref("channels/PNG CALLS/info").set({ name: "PNG CALLS", passwordHash: "", createdBy: "System" })
+        .catch(e => console.error("DEFAULT CHANNEL:", e));
+    }
+    Object.keys(data).forEach(k => {
+      let users = data[k]?.users || {};
+      let d = document.createElement("div");
+      d.className = "card p-5 rounded-2xl cursor-pointer hover:border-amber-500";
+      d.innerHTML = '<div class="text-amber-400 text-xl">◉</div><b class="block text-white mt-3"></b><span class="text-xs text-slate-400"></span>';
+      d.querySelector("b").textContent = k;
+      d.querySelector("span").textContent = Object.keys(users).length + " online";
+      d.onclick = () => openChannel(k);
+      el.appendChild(d);
+    });
   });
- });
 }
 
-$("newChannel").onclick=()=>{$("modal").classList.remove("hidden");$("chName").focus()};
-$("cancel").onclick=()=>{$("modal").classList.add("hidden")};
+if($("newChannel")) $("newChannel").onclick = () => { $("modal").classList.remove("hidden"); $("chName").focus(); };
+if($("cancel")) $("cancel").onclick = () => { $("modal").classList.add("hidden"); };
 
-$("join").onclick=async()=>{
- try{
-  const name=safeChannel($("chName").value),pass=$("chPass").value;
-  if(!name){alert("Nama channel wajib diisi");return}
-  if(pass.length<6){alert("Password minimal 6 karakter");return}
-  const ref=db.ref("channels/"+name+"/info");
-  const snap=await ref.once("value"),info=snap.val();
-  if(info){
-   if(info.passwordHash && await sha256(pass)!==info.passwordHash){alert("Password channel salah");return}
-  }else{
-   await ref.set({name,passwordHash:await sha256(pass),createdBy:me.uid,createdAt:firebase.database.ServerValue.TIMESTAMP});
-  }
-  $("modal").classList.add("hidden");$("chName").value="";$("chPass").value="";
-  await openChannel(name);
- }catch(e){console.error(e);alert("Gagal masuk channel: "+friendlyError(e))}
-};
+if($("join")){
+  $("join").onclick = async () => {
+    try {
+      const name = safeChannel($("chName").value), pass = $("chPass").value;
+      if(!name){ alert("Nama channel wajib diisi"); return; }
+      if(pass.length < 6){ alert("Password minimal 6 karakter"); return; }
+      const ref = db.ref("channels/" + name + "/info");
+      const snap = await ref.once("value"), info = snap.val();
+      if(info){
+        if(info.passwordHash && await sha256(pass) !== info.passwordHash){ alert("Password channel salah"); return; }
+      } else {
+        await ref.set({ name, passwordHash: await sha256(pass), createdBy: me.uid, createdAt: firebase.database.ServerValue.TIMESTAMP });
+      }
+      $("modal").classList.add("hidden"); $("chName").value = ""; $("chPass").value = "";
+      await openChannel(name);
+    } catch(e) {
+      console.error(e); alert("Gagal masuk channel: " + friendlyError(e));
+    }
+  };
+}
 
-/* FIX 1: Memastikan track audio selalu aktif saat negosiasi WebRTC */
 async function getMic(){
   if(!navigator.mediaDevices?.getUserMedia) throw new Error("Browser tidak mendukung akses mikrofon.");
   if(!localStream){
-    localStream=await navigator.mediaDevices.getUserMedia({
-      audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},
-      video:false
+    localStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      video: false
     });
   }
-  localStream.getAudioTracks().forEach(t=>t.enabled=true);
+  localStream.getAudioTracks().forEach(t => t.enabled = true);
   return localStream;
 }
 
 function ensureAudioElement(id){
-  let a=document.getElementById("audio-"+id);
+  let a = document.getElementById("audio-" + id);
   if(!a){
-    a=document.createElement("audio");
-    a.id="audio-"+id;
-    a.autoplay=true;
-    a.playsInline=true;
-    a.controls=false;
-    a.volume=1;
+    a = document.createElement("audio");
+    a.id = "audio-" + id;
+    a.autoplay = true;
+    a.playsInline = true;
+    a.controls = false;
+    a.volume = 1;
     document.body.appendChild(a);
   }
   return a;
 }
 
-/* FIX 2: Penanganan Autoplay audio pada browser modern */
-function remoteAudio(pc,id){
-  pc.ontrack=e=>{
-    console.log("REMOTE TRACK",id,e.track.kind,e.streams);
-    diag("REMOTE TRACK",id,e.track.kind);
-    const a=ensureAudioElement(id);
-    if(e.streams && e.streams[0]) a.srcObject=e.streams[0];
+function remoteAudio(pc, id){
+  pc.ontrack = e => {
+    console.log("REMOTE TRACK", id, e.track.kind, e.streams);
+    diag("REMOTE TRACK", id, e.track.kind);
+    const a = ensureAudioElement(id);
+    if(e.streams && e.streams[0]) a.srcObject = e.streams[0];
     else if(!a.srcObject){
-      const ms=new MediaStream(); ms.addTrack(e.track); a.srcObject=ms;
+      const ms = new MediaStream(); ms.addTrack(e.track); a.srcObject = ms;
     }
-    a.muted=false; a.volume=1; a.autoplay=true; a.playsInline=true;
-    a.play().then(()=>console.log("REMOTE AUDIO PLAYING",id)).catch(err=>{
-      console.warn("REMOTE AUDIO PLAY BLOCKED",err);
-      if($("connection")) $("connection").textContent="⚠ Klik layar untuk mengaktifkan suara";
+    a.muted = false; a.volume = 1; a.autoplay = true; a.playsInline = true;
+    a.play().then(() => console.log("REMOTE AUDIO PLAYING", id)).catch(err => {
+      console.warn("REMOTE AUDIO PLAY BLOCKED", err);
+      if($("connection")) $("connection").textContent = "⚠ Klik layar untuk mengaktifkan suara";
     });
   };
 }
 
-async function createPeer(uid,initiator){
-  if(peers[uid]){diag("PEER EXISTS",uid);return peers[uid]}
-  diag("CREATE PEER",uid,"initiator=",initiator);
+async function createPeer(uid, initiator){
+  if(peers[uid]){ diag("PEER EXISTS", uid); return peers[uid]; }
+  diag("CREATE PEER", uid, "initiator=", initiator);
   await getMic();
-  const pc=new RTCPeerConnection(iceServers);
-  peers[uid]=pc;
-  const track=localStream.getAudioTracks()[0];
-  if(track) pc.addTrack(track,localStream);
-  diag("AUDIO TRACK ADDED",uid,!!track,track?.enabled);
-  remoteAudio(pc,uid);
-  const pending=[]; pc.__pendingIce=pending;
-  pc.onicecandidate=e=>{
+  const pc = new RTCPeerConnection(iceServers);
+  peers[uid] = pc;
+  const track = localStream.getAudioTracks()[0];
+  if(track) pc.addTrack(track, localStream);
+  diag("AUDIO TRACK ADDED", uid, !!track, track?.enabled);
+  remoteAudio(pc, uid);
+  const pending = []; pc.__pendingIce = pending;
+  pc.onicecandidate = e => {
     if(e.candidate){
-      diag("ICE OUT",uid,e.candidate.candidate);
-      db.ref(`signals/${channel}/${uid}/${me.uid}`).push({from:me.uid,to:uid,type:"candidate",candidate:e.candidate.toJSON()}).catch(err=>console.error("ICE WRITE:",err));
+      diag("ICE OUT", uid, e.candidate.candidate);
+      db.ref(`signals/${channel}/${uid}/${me.uid}`).push({ from: me.uid, to: uid, type: "candidate", candidate: e.candidate.toJSON() }).catch(err => console.error("ICE WRITE:", err));
     }
   };
-  pc.onicegatheringstatechange=()=>diag("ICE GATHERING",uid,pc.iceGatheringState);
-  pc.oniceconnectionstatechange=()=>{diag("ICE STATE",uid,pc.iceConnectionState);setConn("ICE: "+pc.iceConnectionState+" • WebRTC: "+pc.connectionState)};
-  pc.onconnectionstatechange=()=>{diag("CONNECTION",uid,pc.connectionState);setConn("WebRTC: "+pc.connectionState+" • ICE: "+pc.iceConnectionState);};
-  pc.onsignalingstatechange=()=>diag("SIGNALING STATE",uid,pc.signalingState);
+  pc.onicegatheringstatechange = () => diag("ICE GATHERING", uid, pc.iceGatheringState);
+  pc.oniceconnectionstatechange = () => { diag("ICE STATE", uid, pc.iceConnectionState); setConn("ICE: " + pc.iceConnectionState + " • WebRTC: " + pc.connectionState); };
+  pc.onconnectionstatechange = () => { diag("CONNECTION", uid, pc.connectionState); setConn("WebRTC: " + pc.connectionState + " • ICE: " + pc.iceConnectionState); };
+  pc.onsignalingstatechange = () => diag("SIGNALING STATE", uid, pc.signalingState);
   if(initiator){
-    const offer=await pc.createOffer({offerToReceiveAudio:true});
+    const offer = await pc.createOffer({ offerToReceiveAudio: true });
     await pc.setLocalDescription(offer);
-    diag("OFFER OUT",uid);
-    await db.ref(`signals/${channel}/${uid}/${me.uid}`).push({from:me.uid,to:uid,type:"offer",sdp:offer.sdp});
+    diag("OFFER OUT", uid);
+    await db.ref(`signals/${channel}/${uid}/${me.uid}`).push({ from: me.uid, to: uid, type: "offer", sdp: offer.sdp });
   }
   return pc;
 }
 
 function listenSignals(){
-  signalRef=db.ref(`signals/${channel}/${me.uid}`);
+  signalRef = db.ref(`signals/${channel}/${me.uid}`);
   signalRef.off();
-  diag("LISTEN SIGNALS",channel,me.uid);
-  if($("diagSignal")) $("diagSignal").textContent="⏳ Menunggu signaling dari operator lain...";
-  signalRef.on("child_added",async snap=>{
-    const s=snap.val();
-    if(!s||s.to!==me.uid)return;
-    diag("SIGNAL IN",s.type,"from",s.from);
-    try{
-      const pc=await createPeer(s.from,false);
-      if(s.type==="offer"){
-        await pc.setRemoteDescription({type:"offer",sdp:s.sdp});
-        const ans=await pc.createAnswer();
+  diag("LISTEN SIGNALS", channel, me.uid);
+  if($("diagSignal")) $("diagSignal").textContent = "⏳ Menunggu signaling dari operator lain...";
+  signalRef.on("child_added", async snap => {
+    const s = snap.val();
+    if(!s || s.to !== me.uid) return;
+    diag("SIGNAL IN", s.type, "from", s.from);
+    try {
+      const pc = await createPeer(s.from, false);
+      if(s.type === "offer"){
+        await pc.setRemoteDescription({ type: "offer", sdp: s.sdp });
+        const ans = await pc.createAnswer();
         await pc.setLocalDescription(ans);
-        diag("ANSWER OUT",s.from);
-        await db.ref(`signals/${channel}/${s.from}/${me.uid}`).push({from:me.uid,to:s.from,type:"answer",sdp:ans.sdp});
-      }else if(s.type==="answer"){
-        await pc.setRemoteDescription({type:"answer",sdp:s.sdp});
-        diag("ANSWER APPLIED",s.from);
-      }else if(s.type==="candidate"){
-        const c=new RTCIceCandidate(s.candidate);
-        if(pc.remoteDescription&&pc.remoteDescription.type) await pc.addIceCandidate(c);
+        diag("ANSWER OUT", s.from);
+        await db.ref(`signals/${channel}/${s.from}/${me.uid}`).push({ from: me.uid, to: s.from, type: "answer", sdp: ans.sdp });
+      } else if(s.type === "answer"){
+        await pc.setRemoteDescription({ type: "answer", sdp: s.sdp });
+        diag("ANSWER APPLIED", s.from);
+      } else if(s.type === "candidate"){
+        const c = new RTCIceCandidate(s.candidate);
+        if(pc.remoteDescription && pc.remoteDescription.type) await pc.addIceCandidate(c);
         else pc.__pendingIce.push(c);
       }
-      if(pc.remoteDescription&&pc.__pendingIce.length){
-        for(const c of pc.__pendingIce){try{await pc.addIceCandidate(c)}catch(e){console.warn("ICE QUEUE:",e)}}
-        pc.__pendingIce.length=0;
+      if(pc.remoteDescription && pc.__pendingIce.length){
+        for(const c of pc.__pendingIce){ try { await pc.addIceCandidate(c); } catch(e){ console.warn("ICE QUEUE:", e); } }
+        pc.__pendingIce.length = 0;
       }
       await snap.ref.remove();
-    }catch(e){console.error("SIGNAL:",e,s);setConn("⚠ WebRTC: "+e.message)}
+    } catch(e) {
+      console.error("SIGNAL:", e, s); setConn("⚠ WebRTC: " + e.message);
+    }
   });
 }
 
 async function connectToUsers(users){
-  try{ await getMic(); }catch(e){
-    console.error("MIC:",e); setConn("⚠ Mikrofon: "+e.message); return;
+  try { await getMic(); } catch(e){
+    console.error("MIC:", e); setConn("⚠ Mikrofon: " + e.message); return;
   }
-  const ids=Object.keys(users||{});
-  diag("USERS",ids,"ME",me?.uid);
+  const ids = Object.keys(users || {});
+  diag("USERS", ids, "ME", me?.uid);
   for(const uid of ids){
-    if(uid!==me.uid && me.uid<uid){
-      diag("CREATE INITIATOR",uid);
-      try{ await createPeer(uid,true); }catch(e){console.error("PEER:",e);setConn("⚠ Peer error: "+e.message)}
+    if(uid !== me.uid && me.uid < uid){
+      diag("CREATE INITIATOR", uid);
+      try { await createPeer(uid, true); } catch(e){ console.error("PEER:", e); setConn("⚠ Peer error: " + e.message); }
     }
   }
 }
 
 function renderUsers(users){
- $("count").textContent=Object.keys(users).length;
- $("operators").innerHTML="";
- Object.values(users).forEach(u=>{
-  let d=document.createElement("div");
-  d.className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-xs";
-  d.innerHTML='<b></b><div class="text-emerald-400 text-[9px]">● ONLINE</div>';
-  d.querySelector("b").textContent=u.name||"Operator";
-  $("operators").appendChild(d);
- });
+  if($("count")) $("count").textContent = Object.keys(users).length;
+  if($("operators")){
+    $("operators").innerHTML = "";
+    Object.values(users).forEach(u => {
+      let d = document.createElement("div");
+      d.className = "p-2 rounded-xl bg-slate-900 border border-slate-800 text-xs";
+      d.innerHTML = '<b></b><div class="text-emerald-400 text-[9px]">● ONLINE</div>';
+      d.querySelector("b").textContent = u.name || "Operator";
+      $("operators").appendChild(d);
+    });
+  }
 }
 
-/* FIX 3: Inisialisasi Firebase Reference lebih awal sebelum PTT siap ditekan */
 async function openChannel(name){
-  channel=name;
+  channel = name;
   $("dashboard").classList.add("hidden");
   $("room").classList.remove("hidden");
-  $("roomName").textContent=name;
+  $("roomName").textContent = name;
   setConn("Mikrofon izin diminta...");
 
-  speakerRef=db.ref(`channels/${channel}/speaker`);
-  userRef=db.ref(`channels/${channel}/users/${me.uid}`);
-  usersRef=db.ref(`channels/${channel}/users`);
+  speakerRef = db.ref(`channels/${channel}/speaker`);
+  userRef = db.ref(`channels/${channel}/users/${me.uid}`);
+  usersRef = db.ref(`channels/${channel}/users`);
 
-  try{
+  try {
     await getMic();
-    const t=localStream.getAudioTracks()[0];
-    diag("MIC READY",t?.label,t?.readyState,t?.enabled);
+    const t = localStream.getAudioTracks()[0];
+    diag("MIC READY", t?.label, t?.readyState, t?.enabled);
     setConn("● Mikrofon siap • menunggu operator lain...");
-  }catch(e){
-    console.error("MIC OPEN:",e);setConn("⚠ Mikrofon belum diizinkan: "+e.message);return;
+  } catch(e) {
+    console.error("MIC OPEN:", e); setConn("⚠ Mikrofon belum diizinkan: " + e.message); return;
   }
   
-  await userRef.set({uid:me.uid,name:me.displayName||me.email.split("@")[0],joinedAt:firebase.database.ServerValue.TIMESTAMP});
+  await userRef.set({ uid: me.uid, name: me.displayName || me.email.split("@")[0], joinedAt: firebase.database.ServerValue.TIMESTAMP });
   userRef.onDisconnect().remove();
   
   usersRef.off();
-  usersRef.on("value",s=>{const u=s.val()||{};renderUsers(u);setConn("● "+Object.keys(u).length+" operator • WebRTC siap");connectToUsers(u)});
+  usersRef.on("value", s => { const u = s.val() || {}; renderUsers(u); setConn("● " + Object.keys(u).length + " operator • WebRTC siap"); connectToUsers(u); });
   
   speakerRef.off();
-  speakerRef.on("value",s=>updateSpeaker(s.val()));
+  speakerRef.on("value", s => updateSpeaker(s.val()));
   
   listenSignals();
 }
 
 function updateSpeaker(v){
- if(v&&v.uid!==me.uid){
-  $("speakerStatus").textContent="● SEDANG BICARA: "+(v.name||"OPERATOR");
-  $("speakerStatus").className="text-sm text-red-400 mt-1";
-  $("ptt").classList.add("locked");
-  $("pttText").textContent="CHANNEL DIPAKAI";
- }else if(!talking){
-  $("speakerStatus").textContent="● CHANNEL SIAP";
-  $("speakerStatus").className="text-sm text-emerald-400 mt-1";
-  $("ptt").classList.remove("locked");
-  $("pttText").textContent="TEKAN & TAHAN";
- }
+  if(v && v.uid !== me.uid){
+    $("speakerStatus").textContent = "● SEDANG BICARA: " + (v.name || "OPERATOR");
+    $("speakerStatus").className = "text-sm text-red-400 mt-1";
+    $("ptt").classList.add("locked");
+    $("pttText").textContent = "CHANNEL DIPAKAI";
+  } else if(!talking){
+    $("speakerStatus").textContent = "● CHANNEL SIAP";
+    $("speakerStatus").className = "text-sm text-emerald-400 mt-1";
+    $("ptt").classList.remove("locked");
+    $("pttText").textContent = "TEKAN & TAHAN";
+  }
 }
 
-/* FIX 4: Mencegah TypeError transaction null */
 async function acquireSpeaker(){
- if(!channel||talking||!speakerRef)return false;
- let ok=false;
- await speakerRef.transaction(v=>{
-  if(!v||!v.uid||Date.now()-(v.startedAt||0)>15000){
-   ok=true;
-   return {uid:me.uid,name:me.displayName||me.email.split("@")[0],startedAt:firebase.database.ServerValue.TIMESTAMP};
-  }
-  return v;
- });
- return ok;
+  if(!channel || talking || !speakerRef) return false;
+  let ok = false;
+  await speakerRef.transaction(v => {
+    if(!v || !v.uid || Date.now() - (v.startedAt || 0) > 15000){
+      ok = true;
+      return { uid: me.uid, name: me.displayName || me.email.split("@")[0], startedAt: firebase.database.ServerValue.TIMESTAMP };
+    }
+    return v;
+  });
+  return ok;
 }
 
-/* FIX 5: Menangani pengiriman suara saat PTT ditekan */
 async function startTalking(){
- if(talking||!channel||!speakerRef)return;
- const ok=await acquireSpeaker();
- if(!ok){beep(400);return}
- try{
-  const stream=await getMic();
-  const track=stream.getAudioTracks()[0];
-  if(!track)throw new Error("Track mikrofon tidak ditemukan.");
-  
-  track.enabled=true;
-  
-  talking=true;beep(1200);
-  $("ptt").classList.add("talking");$("ptt").classList.remove("locked");
-  $("pttText").textContent="SEDANG BICARA...";
-  $("speakerStatus").textContent="● KAMU SEDANG BICARA";
-  $("speakerStatus").className="text-sm text-red-400 mt-1";
-  
-  clearInterval(speakerTimer);
-  speakerTimer=setInterval(()=>{
-   if(speakerRef){
-    speakerRef.transaction(v=>v&&v.uid===me.uid?{...v,startedAt:firebase.database.ServerValue.TIMESTAMP}:v);
-   }
-  },5000);
- }catch(e){
-  console.error("PTT:",e);
-  if(speakerRef){
-   await speakerRef.transaction(v=>v&&v.uid===me.uid?null:v);
+  if(talking || !channel || !speakerRef) return;
+  const ok = await acquireSpeaker();
+  if(!ok){ beep(400); return; }
+  try {
+    const stream = await getMic();
+    const track = stream.getAudioTracks()[0];
+    if(!track) throw new Error("Track mikrofon tidak ditemukan.");
+    
+    track.enabled = true;
+    
+    talking = true; beep(1200);
+    $("ptt").classList.add("talking"); $("ptt").classList.remove("locked");
+    $("pttText").textContent = "SEDANG BICARA...";
+    $("speakerStatus").textContent = "● KAMU SEDANG BICARA";
+    $("speakerStatus").className = "text-sm text-red-400 mt-1";
+    
+    clearInterval(speakerTimer);
+    speakerTimer = setInterval(() => {
+      if(speakerRef){
+        speakerRef.transaction(v => v && v.uid === me.uid ? { ...v, startedAt: firebase.database.ServerValue.TIMESTAMP } : v);
+      }
+    }, 5000);
+  } catch(e) {
+    console.error("PTT:", e);
+    if(speakerRef){
+      await speakerRef.transaction(v => v && v.uid === me.uid ? null : v);
+    }
+    alert("Mikrofon tidak tersedia: " + e.message);
   }
-  alert("Mikrofon tidak tersedia: "+e.message);
- }
 }
 
-/* FIX 6: Mematikan transmisi suara saat PTT dilepas tanpa memutuskan koneksi */
 async function stopTalking(){
- if(!talking)return;
- 
- if(localStream){
-   localStream.getAudioTracks().forEach(t=>t.enabled=false);
- }
- 
- talking=false;clearInterval(speakerTimer);beep(600);
- $("ptt").classList.remove("talking");
- $("pttText").textContent="TEKAN & TAHAN";
- 
- if(speakerRef){
-  await speakerRef.transaction(v=>v&&v.uid===me.uid?null:v);
-  updateSpeaker(await speakerRef.once("value").then(s=>s.val()));
- }
+  if(!talking) return;
+  
+  if(localStream){
+    localStream.getAudioTracks().forEach(t => t.enabled = false);
+  }
+  
+  talking = false; clearInterval(speakerTimer); beep(600);
+  $("ptt").classList.remove("talking");
+  $("pttText").textContent = "TEKAN & TAHAN";
+  
+  if(speakerRef){
+    await speakerRef.transaction(v => v && v.uid === me.uid ? null : v);
+    updateSpeaker(await speakerRef.once("value").then(s => s.val()));
+  }
 }
 
 async function leaveRoom(){
- if(!channel)return;
- try{
-  clearInterval(speakerTimer);
-  if(speakerRef)await speakerRef.transaction(v=>v&&v.uid===me.uid?null:v);
-  if(userRef){userRef.onDisconnect().cancel();await userRef.remove()}
-  usersRef?.off();speakerRef?.off();signalRef?.off();
-  Object.values(peers).forEach(p=>p.close());
-  peers={};
-  document.querySelectorAll("audio[id^='audio-']").forEach(a=>a.remove());
- }catch(e){console.error("LEAVE:",e)}
- channel=null;
- $("room").classList.add("hidden");
- $("dashboard").classList.remove("hidden");
+  if(!channel) return;
+  try {
+    clearInterval(speakerTimer);
+    if(speakerRef) await speakerRef.transaction(v => v && v.uid === me.uid ? null : v);
+    if(userRef){ userRef.onDisconnect().cancel(); await userRef.remove(); }
+    usersRef?.off(); speakerRef?.off(); signalRef?.off();
+    Object.values(peers).forEach(p => p.close());
+    peers = {};
+    document.querySelectorAll("audio[id^='audio-']").forEach(a => a.remove());
+  } catch(e) { console.error("LEAVE:", e); }
+  channel = null;
+  $("room").classList.add("hidden");
+  $("dashboard").classList.remove("hidden");
 }
 
-$("back").onclick=leaveRoom;
-$("backMobile").onclick=leaveRoom;
-$("logout").onclick=async()=>{await leaveRoom();await auth.signOut()};
+if($("back")) $("back").onclick = leaveRoom;
+if($("backMobile")) $("backMobile").onclick = leaveRoom;
+if($("logout")) $("logout").onclick = async () => { await leaveRoom(); await auth.signOut(); };
 
 function unlockAudio(){
- try{
-  const c=new(window.AudioContext||window.webkitAudioContext)();
-  if(c.state==="suspended")c.resume().catch(()=>{});
- }catch(e){}
- document.querySelectorAll("audio").forEach(a=>{
-  if(a.srcObject)a.play().catch(()=>{});
- });
+  try {
+    const c = new (window.AudioContext || window.webkitAudioContext)();
+    if(c.state === "suspended") c.resume().catch(() => {});
+  } catch(e) {}
+  document.querySelectorAll("audio").forEach(a => {
+    if(a.srcObject) a.play().catch(() => {});
+  });
 }
-$("ptt").onmousedown=e=>{e.preventDefault();unlockAudio();startTalking()};
-$("ptt").onmouseup=e=>{e.preventDefault();stopTalking()};
-$("ptt").onmouseleave=()=>{if(talking)stopTalking()};
-$("ptt").ontouchstart=e=>{e.preventDefault();unlockAudio();startTalking()};
-$("ptt").ontouchend=e=>{e.preventDefault();stopTalking()};
 
-document.onkeydown=e=>{
- if(e.code==="Space"&&!e.repeat&&!["INPUT","TEXTAREA"].includes(document.activeElement.tagName)){
-  e.preventDefault();unlockAudio();startTalking();
- }
+if($("ptt")){
+  $("ptt").onmousedown = e => { e.preventDefault(); unlockAudio(); startTalking(); };
+  $("ptt").onmouseup = e => { e.preventDefault(); stopTalking(); };
+  $("ptt").onmouseleave = () => { if(talking) stopTalking(); };
+  $("ptt").ontouchstart = e => { e.preventDefault(); unlockAudio(); startTalking(); };
+  $("ptt").ontouchend = e => { e.preventDefault(); stopTalking(); };
+}
+
+document.onkeydown = e => {
+  if(e.code === "Space" && !e.repeat && !["INPUT", "TEXTAREA"].includes(document.activeElement.tagName)){
+    e.preventDefault(); unlockAudio(); startTalking();
+  }
 };
-document.onkeyup=e=>{
- if(e.code==="Space"&&!["INPUT","TEXTAREA"].includes(document.activeElement.tagName)){
-  e.preventDefault();stopTalking();
- }
+
+document.onkeyup = e => {
+  if(e.code === "Space" && !["INPUT", "TEXTAREA"].includes(document.activeElement.tagName)){
+    e.preventDefault(); stopTalking();
+  }
 };
-window.addEventListener("blur",()=>{if(talking)stopTalking()});
-window.addEventListener("beforeunload",()=>{
- try{
-  if(userRef)userRef.remove();
-  if(speakerRef)speakerRef.transaction(v=>v&&v.uid===me?.uid?null:v);
- }catch(e){}
+
+window.addEventListener("blur", () => { if(talking) stopTalking(); });
+window.addEventListener("beforeunload", () => {
+  try {
+    if(userRef) userRef.remove();
+    if(speakerRef) speakerRef.transaction(v => v && v.uid === me?.uid ? null : v);
+  } catch(e) {}
 });
 </script>
 </body>
