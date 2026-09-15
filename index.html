@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>INTERCOM OFFICE — Realtime PTT V5</title>
+<title>INTERCOM OFFICE — Realtime PTT V6</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
@@ -83,6 +83,14 @@ button:disabled{opacity:.55;cursor:not-allowed}
 
     <div class="mt-6 text-center text-xs text-slate-500">Tahan tombol / SPACE untuk bicara.<br>Suara dikirim langsung melalui WebRTC.</div>
     <div id="connection" class="mt-4 text-[10px] text-slate-500">Menyiapkan audio...</div>
+    <div id="diagnostic" class="mt-3 w-full max-w-md rounded-xl border border-slate-800 bg-slate-950/70 p-3 text-[10px] text-slate-400">
+      <div class="font-bold text-slate-300 mb-2">WEBRTC DIAGNOSTIC</div>
+      <div id="diagMic">○ Mikrofon</div>
+      <div id="diagUsers">○ Operator</div>
+      <div id="diagSignal">○ Signaling</div>
+      <div id="diagIce">○ ICE</div>
+      <div id="diagAudio">○ Audio</div>
+    </div>
   </section>
 </main>
 </div>
@@ -148,7 +156,28 @@ const iceServers={iceServers:[
  {urls:["stun:stun.l.google.com:19302","stun:stun1.l.google.com:19302"]}
 ]};
 function setConn(t){console.log("STATUS:",t); if($("connection")) $("connection").textContent=t;}
-function diag(t,...a){console.log("INTERCOM:",t,...a)}
+function diag(t,...a){
+  console.log("INTERCOM:",t,...a);
+  const map={
+    "MIC READY":"diagMic","SIGNAL IN":"diagSignal","OFFER OUT":"diagSignal",
+    "ANSWER OUT":"diagSignal","ANSWER APPLIED":"diagSignal",
+    "ICE STATE":"diagIce","CONNECTION":"diagIce",
+    "REMOTE TRACK":"diagAudio","REMOTE TRACK EVENT":"diagAudio"
+  };
+  const el=$(map[t]);
+  if(el){
+    let text="";
+    if(t==="MIC READY") text="✓ Mikrofon siap";
+    else if(t==="SIGNAL IN") text="✓ Sinyal diterima: "+(a[0]||"");
+    else if(t==="OFFER OUT") text="✓ OFFER dikirim";
+    else if(t==="ANSWER OUT") text="✓ ANSWER dikirim";
+    else if(t==="ANSWER APPLIED") text="✓ ANSWER diterima";
+    else if(t==="ICE STATE") text="ICE: "+(a[1]||a[0]||"");
+    else if(t==="CONNECTION") text="WebRTC: "+(a[1]||a[0]||"");
+    else if(t==="REMOTE TRACK"||t==="REMOTE TRACK EVENT") text="✓ Audio remote diterima";
+    el.textContent=text;
+  }
+}
 
 async function sha256(s){
  const b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(s));
@@ -291,6 +320,7 @@ function ensureAudioElement(id){
 function remoteAudio(pc,id){
   pc.ontrack=e=>{
     console.log("REMOTE TRACK",id,e.track.kind,e.streams);
+    diag("REMOTE TRACK",id,e.track.kind);
     const a=ensureAudioElement(id);
     if(e.streams && e.streams[0]) a.srcObject=e.streams[0];
     else if(!a.srcObject){
@@ -305,47 +335,26 @@ function remoteAudio(pc,id){
 }
 
 async function createPeer(uid,initiator){
-  const old=peers[uid];
-  if(old){
-    const st=old.connectionState;
-    if(st!=="closed" && st!=="failed"){
-      diag("PEER EXISTS",uid,st||"new");
-      return old;
-    }
-    try{old.close()}catch(e){}
-    delete peers[uid];
-  }
+  if(peers[uid]){diag("PEER EXISTS",uid);return peers[uid]}
   diag("CREATE PEER",uid,"initiator=",initiator);
   await getMic();
   const pc=new RTCPeerConnection(iceServers);
   peers[uid]=pc;
-  pc.__uid=uid; pc.__initiator=initiator; pc.__pendingIce=[];
   const track=localStream.getAudioTracks()[0];
-  if(!track) throw new Error("Audio track tidak tersedia");
-  pc.addTrack(track,localStream);
-  diag("AUDIO TRACK ADDED",uid,track.readyState,track.enabled);
+  if(track) pc.addTrack(track,localStream);
+  diag("AUDIO TRACK ADDED",uid,!!track,track?.enabled);
   remoteAudio(pc,uid);
+  const pending=[]; pc.__pendingIce=pending;
   pc.onicecandidate=e=>{
     if(e.candidate){
       diag("ICE OUT",uid,e.candidate.candidate);
-      db.ref(`signals/${channel}/${uid}/${me.uid}`).push({from:me.uid,to:uid,type:"candidate",candidate:e.candidate.toJSON()})
-        .catch(err=>console.error("ICE WRITE:",err));
+      db.ref(`signals/${channel}/${uid}/${me.uid}`).push({from:me.uid,to:uid,type:"candidate",candidate:e.candidate.toJSON()}).catch(err=>console.error("ICE WRITE:",err));
     }
   };
   pc.onicegatheringstatechange=()=>diag("ICE GATHERING",uid,pc.iceGatheringState);
-  pc.oniceconnectionstatechange=()=>{
-    diag("ICE STATE",uid,pc.iceConnectionState);
-    setConn("ICE: "+pc.iceConnectionState+" • WebRTC: "+pc.connectionState);
-  };
-  pc.onconnectionstatechange=()=>{
-    diag("CONNECTION",uid,pc.connectionState);
-    setConn("WebRTC: "+pc.connectionState+" • ICE: "+pc.iceConnectionState);
-    if(["failed","closed"].includes(pc.connectionState) && peers[uid]===pc){
-      delete peers[uid];
-    }
-  };
+  pc.oniceconnectionstatechange=()=>{diag("ICE STATE",uid,pc.iceConnectionState);setConn("ICE: "+pc.iceConnectionState+" • WebRTC: "+pc.connectionState)};
+  pc.onconnectionstatechange=()=>{diag("CONNECTION",uid,pc.connectionState);setConn("WebRTC: "+pc.connectionState+" • ICE: "+pc.iceConnectionState);};
   pc.onsignalingstatechange=()=>diag("SIGNALING STATE",uid,pc.signalingState);
-  pc.ontrack=e=>diag("REMOTE TRACK EVENT",uid,e.track?.kind,e.track?.readyState);
   if(initiator){
     const offer=await pc.createOffer({offerToReceiveAudio:true});
     await pc.setLocalDescription(offer);
@@ -359,46 +368,33 @@ function listenSignals(){
   signalRef=db.ref(`signals/${channel}/${me.uid}`);
   signalRef.off();
   diag("LISTEN SIGNALS",channel,me.uid);
+  if($("diagSignal")) $("diagSignal").textContent="⏳ Menunggu signaling dari operator lain...";
   signalRef.on("child_added",async snap=>{
     const s=snap.val();
-    if(!s || s.to!==me.uid) return;
+    if(!s||s.to!==me.uid)return;
     diag("SIGNAL IN",s.type,"from",s.from);
     try{
       const pc=await createPeer(s.from,false);
       if(s.type==="offer"){
-        if(pc.signalingState!=="stable") diag("SIGNALING NOT STABLE",s.from,pc.signalingState);
         await pc.setRemoteDescription({type:"offer",sdp:s.sdp});
-        diag("OFFER APPLIED",s.from);
         const ans=await pc.createAnswer();
         await pc.setLocalDescription(ans);
         diag("ANSWER OUT",s.from);
         await db.ref(`signals/${channel}/${s.from}/${me.uid}`).push({from:me.uid,to:s.from,type:"answer",sdp:ans.sdp});
       }else if(s.type==="answer"){
-        if(pc.signalingState!=="have-local-offer") diag("ANSWER STATE",s.from,pc.signalingState);
         await pc.setRemoteDescription({type:"answer",sdp:s.sdp});
         diag("ANSWER APPLIED",s.from);
       }else if(s.type==="candidate"){
         const c=new RTCIceCandidate(s.candidate);
-        if(pc.remoteDescription && pc.remoteDescription.type){
-          await pc.addIceCandidate(c);
-          diag("ICE IN APPLIED",s.from);
-        }else{
-          pc.__pendingIce.push(c);
-          diag("ICE IN QUEUED",s.from,pc.__pendingIce.length);
-        }
+        if(pc.remoteDescription&&pc.remoteDescription.type) await pc.addIceCandidate(c);
+        else pc.__pendingIce.push(c);
       }
-      if(pc.remoteDescription && pc.__pendingIce.length){
-        for(const c of pc.__pendingIce){
-          try{await pc.addIceCandidate(c)}catch(e){console.warn("ICE QUEUE:",e)}
-        }
-        diag("ICE QUEUE FLUSH",s.from);
+      if(pc.remoteDescription&&pc.__pendingIce.length){
+        for(const c of pc.__pendingIce){try{await pc.addIceCandidate(c)}catch(e){console.warn("ICE QUEUE:",e)}}
         pc.__pendingIce.length=0;
       }
       await snap.ref.remove();
-    }catch(e){
-      console.error("SIGNAL:",e,s);
-      setConn("⚠ WebRTC: "+e.message);
-    }
+    }catch(e){console.error("SIGNAL:",e,s);setConn("⚠ WebRTC: "+e.message)}
   });
 }
 
@@ -408,25 +404,10 @@ async function connectToUsers(users){
   }
   const ids=Object.keys(users||{});
   diag("USERS",ids,"ME",me?.uid);
-  const current=new Set(ids);
-  for(const uid of Object.keys(peers)){
-    if(uid!==me.uid && !current.has(uid)){
-      diag("REMOVE STALE PEER",uid);
-      try{peers[uid].close()}catch(e){}
-      delete peers[uid];
-      document.getElementById("audio-"+uid)?.remove();
-    }
-  }
   for(const uid of ids){
     if(uid!==me.uid && me.uid<uid){
-      const pc=peers[uid];
-      if(!pc || ["failed","closed"].includes(pc.connectionState)){
-        diag("CREATE INITIATOR",uid);
-        try{ await createPeer(uid,true); }
-        catch(e){ console.error("PEER:",e); setConn("⚠ Peer error: "+e.message); }
-      }else{
-        diag("PEER EXISTS",uid,pc.connectionState);
-      }
+      diag("CREATE INITIATOR",uid);
+      try{ await createPeer(uid,true); }catch(e){console.error("PEER:",e);setConn("⚠ Peer error: "+e.message)}
     }
   }
 }
@@ -503,19 +484,10 @@ async function startTalking(){
   const track=stream.getAudioTracks()[0];
   if(!track)throw new Error("Track mikrofon tidak ditemukan.");
   track.enabled=true;
-  diag("PTT START", "peers", Object.keys(peers));
-  let sent=0;
-  for(const [uid,pc] of Object.entries(peers)){
+  Object.values(peers).forEach(pc=>{
    const sender=pc.getSenders().find(s=>s.track&&s.track.kind==="audio");
-   if(sender){
-    await sender.replaceTrack(track);
-    sent++;
-    diag("TRACK SENT",uid,pc.connectionState,pc.iceConnectionState,track.enabled);
-   }else{
-    diag("NO AUDIO SENDER",uid);
-   }
-  }
-  if(!sent) diag("NO TRACK SENT", "Tidak ada peer audio yang siap");
+   if(sender)sender.replaceTrack(track);
+  });
   talking=true;beep(1200);
   $("ptt").classList.add("talking");$("ptt").classList.remove("locked");
   $("pttText").textContent="SEDANG BICARA...";
@@ -534,10 +506,7 @@ async function startTalking(){
 
 async function stopTalking(){
  if(!talking)return;
- talking=false;clearInterval(speakerTimer);
- const stopTrack=localStream?.getAudioTracks?.()[0];
- if(stopTrack) stopTrack.enabled=false;
- beep(600);
+ talking=false;clearInterval(speakerTimer);beep(600);
  $("ptt").classList.remove("talking");
  $("pttText").textContent="TEKAN & TAHAN";
  await speakerRef.transaction(v=>v&&v.uid===me.uid?null:v);
