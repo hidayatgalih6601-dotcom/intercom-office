@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>INTERCOM OFFICE — Realtime PTT V7</title>
+<title>INTERCOM OFFICE — Realtime PTT V6</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
@@ -188,12 +188,9 @@ function safeChannel(s){
 }
 function beep(freq){
  try{
-  const c=getAudioCtx();
-  if(c.state==="suspended")c.resume().catch(()=>{});
-  const o=c.createOscillator(),g=c.createGain();
-  o.frequency.value=freq;g.gain.value=.08;o.connect(g);g.connect(c.destination);
-  o.start();o.stop(c.currentTime+.08);
- }catch(e){console.warn("BEEP:",e)}
+  let c=new(window.AudioContext||window.webkitAudioContext)(),o=c.createOscillator(),g=c.createGain();
+  o.frequency.value=freq;g.gain.value=.08;o.connect(g);g.connect(c.destination);o.start();o.stop(c.currentTime+.07);
+ }catch(e){}
 }
 
 async function doLogin(){
@@ -294,6 +291,7 @@ $("join").onclick=async()=>{
  }catch(e){console.error(e);alert("Gagal masuk channel: "+friendlyError(e))}
 };
 
+/* --- PERBAIKAN 1: Inisialisasi Mikrofon tanpa mematikan track secara permanen --- */
 async function getMic(){
   if(!navigator.mediaDevices?.getUserMedia) throw new Error("Browser tidak mendukung akses mikrofon.");
   if(!localStream){
@@ -301,6 +299,7 @@ async function getMic(){
       audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},
       video:false
     });
+    // Default diset false agar diam di awal, tetapi track tetap terbawa di SDP WebRTC
     localStream.getAudioTracks().forEach(t=>t.enabled=false);
   }
   return localStream;
@@ -320,6 +319,7 @@ function ensureAudioElement(id){
   return a;
 }
 
+/* --- PERBAIKAN 2: Autoplay Handler untuk browser modern --- */
 function remoteAudio(pc,id){
   pc.ontrack=e=>{
     console.log("REMOTE TRACK",id,e.track.kind,e.streams);
@@ -332,23 +332,13 @@ function remoteAudio(pc,id){
     a.muted=false; a.volume=1; a.autoplay=true; a.playsInline=true;
     a.play().then(()=>console.log("REMOTE AUDIO PLAYING",id)).catch(err=>{
       console.warn("REMOTE AUDIO PLAY BLOCKED",err);
-      $("connection").textContent="⚠ Klik tombol PTT untuk mengaktifkan speaker";
+      $("connection").textContent="⚠ Klik tombol PTT untuk mengaktifkan suara";
     });
   };
 }
 
 async function createPeer(uid,initiator){
-  if(peers[uid]){
-    const old=peers[uid];
-    if(["failed","closed"].includes(old.connectionState)){
-      try{old.close()}catch(e){}
-      delete peers[uid];
-      document.getElementById("audio-"+uid)?.remove();
-    }else{
-      diag("PEER EXISTS",uid,old.connectionState);
-      return old;
-    }
-  }
+  if(peers[uid]){diag("PEER EXISTS",uid);return peers[uid]}
   diag("CREATE PEER",uid,"initiator=",initiator);
   await getMic();
   const pc=new RTCPeerConnection(iceServers);
@@ -357,32 +347,22 @@ async function createPeer(uid,initiator){
   if(track) pc.addTrack(track,localStream);
   diag("AUDIO TRACK ADDED",uid,!!track,track?.enabled);
   remoteAudio(pc,uid);
-  pc.__pendingIce=[];
+  const pending=[]; pc.__pendingIce=pending;
   pc.onicecandidate=e=>{
-    if(!e.candidate)return;
-    const path=`signals/${channel}/${uid}/${me.uid}`;
-    diag("ICE OUT",uid,e.candidate.candidate);
-    db.ref(path).push({from:me.uid,to:uid,type:"candidate",candidate:e.candidate.toJSON()})
-      .then(r=>diag("ICE WRITE OK",uid,r.key))
-      .catch(err=>{console.error("ICE WRITE:",err);diag("ICE WRITE ERROR",err.message)});
+    if(e.candidate){
+      diag("ICE OUT",uid,e.candidate.candidate);
+      db.ref(`signals/${channel}/${uid}/${me.uid}`).push({from:me.uid,to:uid,type:"candidate",candidate:e.candidate.toJSON()}).catch(err=>console.error("ICE WRITE:",err));
+    }
   };
   pc.onicegatheringstatechange=()=>diag("ICE GATHERING",uid,pc.iceGatheringState);
   pc.oniceconnectionstatechange=()=>{diag("ICE STATE",uid,pc.iceConnectionState);setConn("ICE: "+pc.iceConnectionState+" • WebRTC: "+pc.connectionState)};
-  pc.onconnectionstatechange=()=>{diag("CONNECTION",uid,pc.connectionState);setConn("WebRTC: "+pc.connectionState+" • ICE: "+pc.iceConnectionState)};
+  pc.onconnectionstatechange=()=>{diag("CONNECTION",uid,pc.connectionState);setConn("WebRTC: "+pc.connectionState+" • ICE: "+pc.iceConnectionState);};
   pc.onsignalingstatechange=()=>diag("SIGNALING STATE",uid,pc.signalingState);
   if(initiator){
     const offer=await pc.createOffer({offerToReceiveAudio:true});
     await pc.setLocalDescription(offer);
     diag("OFFER OUT",uid);
-    const path=`signals/${channel}/${uid}/${me.uid}`;
-    try{
-      const r=await db.ref(path).push({from:me.uid,to:uid,type:"offer",sdp:offer.sdp,createdAt:firebase.database.ServerValue.TIMESTAMP});
-      diag("OFFER WRITE OK",uid,r.key);
-    }catch(e){
-      console.error("OFFER WRITE ERROR:",e);
-      diag("OFFER WRITE ERROR",e.message);
-      setConn("⚠ Firebase offer: "+e.message);
-    }
+    await db.ref(`signals/${channel}/${uid}/${me.uid}`).push({from:me.uid,to:uid,type:"offer",sdp:offer.sdp});
   }
   return pc;
 }
@@ -392,27 +372,18 @@ function listenSignals(){
   signalRef.off();
   diag("LISTEN SIGNALS",channel,me.uid);
   if($("diagSignal")) $("diagSignal").textContent="⏳ Menunggu signaling dari operator lain...";
-  signalRef.on("value",snap=>{
-    const v=snap.val()||{};
-    const n=Object.keys(v).length;
-    diag("SIGNAL QUEUE",n);
-  });
   signalRef.on("child_added",async snap=>{
     const s=snap.val();
-    diag("CHILD ADDED",snap.key,s?.type,s?.from,s?.to);
     if(!s||s.to!==me.uid)return;
     diag("SIGNAL IN",s.type,"from",s.from);
     try{
       const pc=await createPeer(s.from,false);
       if(s.type==="offer"){
         await pc.setRemoteDescription({type:"offer",sdp:s.sdp});
-        diag("OFFER APPLIED",s.from);
         const ans=await pc.createAnswer();
         await pc.setLocalDescription(ans);
         diag("ANSWER OUT",s.from);
-        const path=`signals/${channel}/${s.from}/${me.uid}`;
-        const r=await db.ref(path).push({from:me.uid,to:s.from,type:"answer",sdp:ans.sdp,createdAt:firebase.database.ServerValue.TIMESTAMP});
-        diag("ANSWER WRITE OK",s.from,r.key);
+        await db.ref(`signals/${channel}/${s.from}/${me.uid}`).push({from:me.uid,to:s.from,type:"answer",sdp:ans.sdp});
       }else if(s.type==="answer"){
         await pc.setRemoteDescription({type:"answer",sdp:s.sdp});
         diag("ANSWER APPLIED",s.from);
@@ -426,12 +397,7 @@ function listenSignals(){
         pc.__pendingIce.length=0;
       }
       await snap.ref.remove();
-      diag("SIGNAL REMOVED",snap.key);
-    }catch(e){
-      console.error("SIGNAL:",e,s);
-      diag("SIGNAL ERROR",e.message);
-      setConn("⚠ WebRTC signaling: "+e.message);
-    }
+    }catch(e){console.error("SIGNAL:",e,s);setConn("⚠ WebRTC: "+e.message)}
   });
 }
 
@@ -444,7 +410,7 @@ async function connectToUsers(users){
   for(const uid of ids){
     if(uid!==me.uid && me.uid<uid){
       diag("CREATE INITIATOR",uid);
-      try{ await createPeer(uid,true); }catch(e){console.error("PEER:",e);diag("PEER ERROR",e.message);setConn("⚠ Peer error: "+e.message)}
+      try{ await createPeer(uid,true); }catch(e){console.error("PEER:",e);setConn("⚠ Peer error: "+e.message)}
     }
   }
 }
@@ -512,6 +478,7 @@ async function acquireSpeaker(){
  return ok;
 }
 
+/* --- PERBAIKAN 3: Pengaktifan audio track PTT yang stabil --- */
 async function startTalking(){
  if(talking||!channel)return;
  const ok=await acquireSpeaker();
@@ -520,11 +487,10 @@ async function startTalking(){
   const stream=await getMic();
   const track=stream.getAudioTracks()[0];
   if(!track)throw new Error("Track mikrofon tidak ditemukan.");
+  
+  // Mengaktifkan pengiriman data suara ke WebRTC
   track.enabled=true;
-  Object.values(peers).forEach(pc=>{
-   const sender=pc.getSenders().find(s=>s.track&&s.track.kind==="audio");
-   if(sender)sender.replaceTrack(track);
-  });
+  
   talking=true;beep(1200);
   $("ptt").classList.add("talking");$("ptt").classList.remove("locked");
   $("pttText").textContent="SEDANG BICARA...";
@@ -541,8 +507,14 @@ async function startTalking(){
  }
 }
 
+/* --- PERBAIKAN 4: Menonaktifkan audio track PTT tanpa memutuskan koneksi --- */
 async function stopTalking(){
  if(!talking)return;
+ 
+ if(localStream){
+   localStream.getAudioTracks().forEach(t=>t.enabled=false);
+ }
+ 
  talking=false;clearInterval(speakerTimer);beep(600);
  $("ptt").classList.remove("talking");
  $("pttText").textContent="TEKAN & TAHAN";
@@ -570,11 +542,9 @@ $("back").onclick=leaveRoom;
 $("backMobile").onclick=leaveRoom;
 $("logout").onclick=async()=>{await leaveRoom();await auth.signOut()};
 
-let audioCtx=null;
-function getAudioCtx(){ if(!audioCtx) audioCtx=new(window.AudioContext||window.webkitAudioContext)(); return audioCtx; }
 function unlockAudio(){
  try{
-  const c=getAudioCtx();
+  const c=new(window.AudioContext||window.webkitAudioContext)();
   if(c.state==="suspended")c.resume().catch(()=>{});
  }catch(e){}
  document.querySelectorAll("audio").forEach(a=>{
