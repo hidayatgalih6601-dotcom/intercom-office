@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>INTERCOM OFFICE — Realtime PTT V6</title>
+<title>INTERCOM OFFICE — Realtime PTT V7</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
@@ -188,9 +188,12 @@ function safeChannel(s){
 }
 function beep(freq){
  try{
-  let c=new(window.AudioContext||window.webkitAudioContext)(),o=c.createOscillator(),g=c.createGain();
-  o.frequency.value=freq;g.gain.value=.08;o.connect(g);g.connect(c.destination);o.start();o.stop(c.currentTime+.07);
- }catch(e){}
+  const c=getAudioCtx();
+  if(c.state==="suspended")c.resume().catch(()=>{});
+  const o=c.createOscillator(),g=c.createGain();
+  o.frequency.value=freq;g.gain.value=.08;o.connect(g);g.connect(c.destination);
+  o.start();o.stop(c.currentTime+.08);
+ }catch(e){console.warn("BEEP:",e)}
 }
 
 async function doLogin(){
@@ -335,7 +338,17 @@ function remoteAudio(pc,id){
 }
 
 async function createPeer(uid,initiator){
-  if(peers[uid]){diag("PEER EXISTS",uid);return peers[uid]}
+  if(peers[uid]){
+    const old=peers[uid];
+    if(["failed","closed"].includes(old.connectionState)){
+      try{old.close()}catch(e){}
+      delete peers[uid];
+      document.getElementById("audio-"+uid)?.remove();
+    }else{
+      diag("PEER EXISTS",uid,old.connectionState);
+      return old;
+    }
+  }
   diag("CREATE PEER",uid,"initiator=",initiator);
   await getMic();
   const pc=new RTCPeerConnection(iceServers);
@@ -344,22 +357,32 @@ async function createPeer(uid,initiator){
   if(track) pc.addTrack(track,localStream);
   diag("AUDIO TRACK ADDED",uid,!!track,track?.enabled);
   remoteAudio(pc,uid);
-  const pending=[]; pc.__pendingIce=pending;
+  pc.__pendingIce=[];
   pc.onicecandidate=e=>{
-    if(e.candidate){
-      diag("ICE OUT",uid,e.candidate.candidate);
-      db.ref(`signals/${channel}/${uid}/${me.uid}`).push({from:me.uid,to:uid,type:"candidate",candidate:e.candidate.toJSON()}).catch(err=>console.error("ICE WRITE:",err));
-    }
+    if(!e.candidate)return;
+    const path=`signals/${channel}/${uid}/${me.uid}`;
+    diag("ICE OUT",uid,e.candidate.candidate);
+    db.ref(path).push({from:me.uid,to:uid,type:"candidate",candidate:e.candidate.toJSON()})
+      .then(r=>diag("ICE WRITE OK",uid,r.key))
+      .catch(err=>{console.error("ICE WRITE:",err);diag("ICE WRITE ERROR",err.message)});
   };
   pc.onicegatheringstatechange=()=>diag("ICE GATHERING",uid,pc.iceGatheringState);
   pc.oniceconnectionstatechange=()=>{diag("ICE STATE",uid,pc.iceConnectionState);setConn("ICE: "+pc.iceConnectionState+" • WebRTC: "+pc.connectionState)};
-  pc.onconnectionstatechange=()=>{diag("CONNECTION",uid,pc.connectionState);setConn("WebRTC: "+pc.connectionState+" • ICE: "+pc.iceConnectionState);};
+  pc.onconnectionstatechange=()=>{diag("CONNECTION",uid,pc.connectionState);setConn("WebRTC: "+pc.connectionState+" • ICE: "+pc.iceConnectionState)};
   pc.onsignalingstatechange=()=>diag("SIGNALING STATE",uid,pc.signalingState);
   if(initiator){
     const offer=await pc.createOffer({offerToReceiveAudio:true});
     await pc.setLocalDescription(offer);
     diag("OFFER OUT",uid);
-    await db.ref(`signals/${channel}/${uid}/${me.uid}`).push({from:me.uid,to:uid,type:"offer",sdp:offer.sdp});
+    const path=`signals/${channel}/${uid}/${me.uid}`;
+    try{
+      const r=await db.ref(path).push({from:me.uid,to:uid,type:"offer",sdp:offer.sdp,createdAt:firebase.database.ServerValue.TIMESTAMP});
+      diag("OFFER WRITE OK",uid,r.key);
+    }catch(e){
+      console.error("OFFER WRITE ERROR:",e);
+      diag("OFFER WRITE ERROR",e.message);
+      setConn("⚠ Firebase offer: "+e.message);
+    }
   }
   return pc;
 }
@@ -369,18 +392,27 @@ function listenSignals(){
   signalRef.off();
   diag("LISTEN SIGNALS",channel,me.uid);
   if($("diagSignal")) $("diagSignal").textContent="⏳ Menunggu signaling dari operator lain...";
+  signalRef.on("value",snap=>{
+    const v=snap.val()||{};
+    const n=Object.keys(v).length;
+    diag("SIGNAL QUEUE",n);
+  });
   signalRef.on("child_added",async snap=>{
     const s=snap.val();
+    diag("CHILD ADDED",snap.key,s?.type,s?.from,s?.to);
     if(!s||s.to!==me.uid)return;
     diag("SIGNAL IN",s.type,"from",s.from);
     try{
       const pc=await createPeer(s.from,false);
       if(s.type==="offer"){
         await pc.setRemoteDescription({type:"offer",sdp:s.sdp});
+        diag("OFFER APPLIED",s.from);
         const ans=await pc.createAnswer();
         await pc.setLocalDescription(ans);
         diag("ANSWER OUT",s.from);
-        await db.ref(`signals/${channel}/${s.from}/${me.uid}`).push({from:me.uid,to:s.from,type:"answer",sdp:ans.sdp});
+        const path=`signals/${channel}/${s.from}/${me.uid}`;
+        const r=await db.ref(path).push({from:me.uid,to:s.from,type:"answer",sdp:ans.sdp,createdAt:firebase.database.ServerValue.TIMESTAMP});
+        diag("ANSWER WRITE OK",s.from,r.key);
       }else if(s.type==="answer"){
         await pc.setRemoteDescription({type:"answer",sdp:s.sdp});
         diag("ANSWER APPLIED",s.from);
@@ -394,7 +426,12 @@ function listenSignals(){
         pc.__pendingIce.length=0;
       }
       await snap.ref.remove();
-    }catch(e){console.error("SIGNAL:",e,s);setConn("⚠ WebRTC: "+e.message)}
+      diag("SIGNAL REMOVED",snap.key);
+    }catch(e){
+      console.error("SIGNAL:",e,s);
+      diag("SIGNAL ERROR",e.message);
+      setConn("⚠ WebRTC signaling: "+e.message);
+    }
   });
 }
 
@@ -407,7 +444,7 @@ async function connectToUsers(users){
   for(const uid of ids){
     if(uid!==me.uid && me.uid<uid){
       diag("CREATE INITIATOR",uid);
-      try{ await createPeer(uid,true); }catch(e){console.error("PEER:",e);setConn("⚠ Peer error: "+e.message)}
+      try{ await createPeer(uid,true); }catch(e){console.error("PEER:",e);diag("PEER ERROR",e.message);setConn("⚠ Peer error: "+e.message)}
     }
   }
 }
@@ -533,9 +570,11 @@ $("back").onclick=leaveRoom;
 $("backMobile").onclick=leaveRoom;
 $("logout").onclick=async()=>{await leaveRoom();await auth.signOut()};
 
+let audioCtx=null;
+function getAudioCtx(){ if(!audioCtx) audioCtx=new(window.AudioContext||window.webkitAudioContext)(); return audioCtx; }
 function unlockAudio(){
  try{
-  const c=new(window.AudioContext||window.webkitAudioContext)();
+  const c=getAudioCtx();
   if(c.state==="suspended")c.resume().catch(()=>{});
  }catch(e){}
  document.querySelectorAll("audio").forEach(a=>{
