@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>INTERCOM OFFICE — Realtime PTT</title>
+<title>INTERCOM OFFICE — Realtime PTT V4</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
@@ -144,12 +144,11 @@ const db=firebaseReady?firebase.database():null;
 let me=null,channel=null,userRef=null,usersRef=null,speakerRef=null,signalRef=null;
 let peers={},localStream=null,talking=false,speakerTimer=null;
 
-const iceServers={
- iceServers:[
-  {urls:"stun:stun.l.google.com:19302"},
-  {urls:"stun:stun1.l.google.com:19302"}
- ]
-};
+const iceServers={iceServers:[
+ {urls:["stun:stun.l.google.com:19302","stun:stun1.l.google.com:19302"]}
+]};
+function setConn(t){console.log("STATUS:",t); if($("connection")) $("connection").textContent=t;}
+function diag(t,...a){console.log("INTERCOM:",t,...a)}
 
 async function sha256(s){
  const b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(s));
@@ -306,44 +305,31 @@ function remoteAudio(pc,id){
 }
 
 async function createPeer(uid,initiator){
-  if(peers[uid]) return peers[uid];
+  if(peers[uid]){diag("PEER EXISTS",uid);return peers[uid]}
+  diag("CREATE PEER",uid,"initiator=",initiator);
   await getMic();
-  const pc=new RTCPeerConnection({iceServers:[
-    {urls:["stun:stun.l.google.com:19302","stun:stun1.l.google.com:19302"]}
-  ]});
+  const pc=new RTCPeerConnection(iceServers);
   peers[uid]=pc;
   const track=localStream.getAudioTracks()[0];
   if(track) pc.addTrack(track,localStream);
+  diag("AUDIO TRACK ADDED",uid,!!track,track?.enabled);
   remoteAudio(pc,uid);
-
-  const pending=[];
-  pc.__pendingIce=pending;
+  const pending=[]; pc.__pendingIce=pending;
   pc.onicecandidate=e=>{
     if(e.candidate){
-      db.ref(`signals/${channel}/${uid}/${me.uid}`).push({
-        from:me.uid,to:uid,type:"candidate",candidate:e.candidate.toJSON()
-      }).catch(console.error);
+      diag("ICE OUT",uid,e.candidate.candidate);
+      db.ref(`signals/${channel}/${uid}/${me.uid}`).push({from:me.uid,to:uid,type:"candidate",candidate:e.candidate.toJSON()}).catch(err=>console.error("ICE WRITE:",err));
     }
   };
-  pc.oniceconnectionstatechange=()=>{
-    console.log("ICE",uid,pc.iceConnectionState);
-    $("connection").textContent="ICE: "+pc.iceConnectionState+" • WebRTC: "+pc.connectionState;
-  };
-  pc.onconnectionstatechange=()=>{
-    console.log("CONNECTION",uid,pc.connectionState);
-    $("connection").textContent="WebRTC: "+pc.connectionState+" • ICE: "+pc.iceConnectionState;
-    if(["failed","closed"].includes(pc.connectionState)){
-      try{pc.close()}catch(e){}
-      delete peers[uid];
-    }
-  };
-
+  pc.onicegatheringstatechange=()=>diag("ICE GATHERING",uid,pc.iceGatheringState);
+  pc.oniceconnectionstatechange=()=>{diag("ICE STATE",uid,pc.iceConnectionState);setConn("ICE: "+pc.iceConnectionState+" • WebRTC: "+pc.connectionState)};
+  pc.onconnectionstatechange=()=>{diag("CONNECTION",uid,pc.connectionState);setConn("WebRTC: "+pc.connectionState+" • ICE: "+pc.iceConnectionState);};
+  pc.onsignalingstatechange=()=>diag("SIGNALING STATE",uid,pc.signalingState);
   if(initiator){
     const offer=await pc.createOffer({offerToReceiveAudio:true});
     await pc.setLocalDescription(offer);
-    await db.ref(`signals/${channel}/${uid}/${me.uid}`).push({
-      from:me.uid,to:uid,type:"offer",sdp:offer.sdp
-    });
+    diag("OFFER OUT",uid);
+    await db.ref(`signals/${channel}/${uid}/${me.uid}`).push({from:me.uid,to:uid,type:"offer",sdp:offer.sdp});
   }
   return pc;
 }
@@ -351,45 +337,46 @@ async function createPeer(uid,initiator){
 function listenSignals(){
   signalRef=db.ref(`signals/${channel}/${me.uid}`);
   signalRef.off();
+  diag("LISTEN SIGNALS",channel,me.uid);
   signalRef.on("child_added",async snap=>{
     const s=snap.val();
-    if(!s||s.to!==me.uid) return;
+    if(!s||s.to!==me.uid)return;
+    diag("SIGNAL IN",s.type,"from",s.from);
     try{
       const pc=await createPeer(s.from,false);
       if(s.type==="offer"){
         await pc.setRemoteDescription({type:"offer",sdp:s.sdp});
         const ans=await pc.createAnswer();
         await pc.setLocalDescription(ans);
-        await db.ref(`signals/${channel}/${s.from}/${me.uid}`).push({
-          from:me.uid,to:s.from,type:"answer",sdp:ans.sdp
-        });
-        if(pc.__pendingIce.length){
-          for(const c of pc.__pendingIce){try{await pc.addIceCandidate(c)}catch(e){console.warn(e)}}
-          pc.__pendingIce.length=0;
-        }
+        diag("ANSWER OUT",s.from);
+        await db.ref(`signals/${channel}/${s.from}/${me.uid}`).push({from:me.uid,to:s.from,type:"answer",sdp:ans.sdp});
       }else if(s.type==="answer"){
         await pc.setRemoteDescription({type:"answer",sdp:s.sdp});
-        if(pc.__pendingIce.length){
-          for(const c of pc.__pendingIce){try{await pc.addIceCandidate(c)}catch(e){console.warn(e)}}
-          pc.__pendingIce.length=0;
-        }
+        diag("ANSWER APPLIED",s.from);
       }else if(s.type==="candidate"){
         const c=new RTCIceCandidate(s.candidate);
-        if(pc.remoteDescription && pc.remoteDescription.type) await pc.addIceCandidate(c);
+        if(pc.remoteDescription&&pc.remoteDescription.type) await pc.addIceCandidate(c);
         else pc.__pendingIce.push(c);
       }
-    }catch(e){console.error("SIGNAL:",e);$("connection").textContent="⚠ WebRTC error: "+e.message}
-    snap.ref.remove().catch(()=>{});
+      if(pc.remoteDescription&&pc.__pendingIce.length){
+        for(const c of pc.__pendingIce){try{await pc.addIceCandidate(c)}catch(e){console.warn("ICE QUEUE:",e)}}
+        pc.__pendingIce.length=0;
+      }
+      await snap.ref.remove();
+    }catch(e){console.error("SIGNAL:",e,s);setConn("⚠ WebRTC: "+e.message)}
   });
 }
 
 async function connectToUsers(users){
   try{ await getMic(); }catch(e){
-    $("connection").textContent="⚠ Mikrofon: "+e.message; return;
+    console.error("MIC:",e); setConn("⚠ Mikrofon: "+e.message); return;
   }
-  for(const uid in users){
+  const ids=Object.keys(users||{});
+  diag("USERS",ids,"ME",me?.uid);
+  for(const uid of ids){
     if(uid!==me.uid && me.uid<uid){
-      try{ await createPeer(uid,true); }catch(e){console.error("PEER:",e)}
+      diag("CREATE INITIATOR",uid);
+      try{ await createPeer(uid,true); }catch(e){console.error("PEER:",e);setConn("⚠ Peer error: "+e.message)}
     }
   }
 }
@@ -407,36 +394,27 @@ function renderUsers(users){
 }
 
 async function openChannel(name){
- channel=name;
- $("dashboard").classList.add("hidden");
- $("room").classList.remove("hidden");
- $("roomName").textContent=name;
- $("connection").textContent="Menghubungkan ke channel...";
-
- userRef=db.ref(`channels/${channel}/users/${me.uid}`);
- await userRef.set({uid:me.uid,name:me.displayName||me.email.split("@")[0],joinedAt:firebase.database.ServerValue.TIMESTAMP});
- userRef.onDisconnect().remove();
-
- usersRef=db.ref(`channels/${channel}/users`);
- usersRef.off();
- usersRef.on("value",s=>{
-  const u=s.val()||{};
-  renderUsers(u);
-  connectToUsers(u);
- });
-
- speakerRef=db.ref(`channels/${channel}/speaker`);
- speakerRef.off();
- speakerRef.on("value",s=>updateSpeaker(s.val()));
-
- listenSignals();
-
- try{
-  await getMic();
-  $("connection").textContent="● Mikrofon siap • WebRTC aktif";
- }catch(e){
-  $("connection").textContent="⚠ Mikrofon belum diizinkan: "+e.message;
- }
+  channel=name;
+  $("dashboard").classList.add("hidden");
+  $("room").classList.remove("hidden");
+  $("roomName").textContent=name;
+  setConn("Mikrofon izin diminta...");
+  try{
+    await getMic();
+    const t=localStream.getAudioTracks()[0];
+    diag("MIC READY",t?.label,t?.readyState,t?.enabled);
+    setConn("● Mikrofon siap • menunggu operator lain...");
+  }catch(e){
+    console.error("MIC OPEN:",e);setConn("⚠ Mikrofon belum diizinkan: "+e.message);return;
+  }
+  userRef=db.ref(`channels/${channel}/users/${me.uid}`);
+  await userRef.set({uid:me.uid,name:me.displayName||me.email.split("@")[0],joinedAt:firebase.database.ServerValue.TIMESTAMP});
+  userRef.onDisconnect().remove();
+  usersRef=db.ref(`channels/${channel}/users`);
+  usersRef.off();
+  usersRef.on("value",s=>{const u=s.val()||{};renderUsers(u);setConn("● "+Object.keys(u).length+" operator • WebRTC siap");connectToUsers(u)});
+  speakerRef=db.ref(`channels/${channel}/speaker`);speakerRef.off();speakerRef.on("value",s=>updateSpeaker(s.val()));
+  listenSignals();
 }
 
 function updateSpeaker(v){
